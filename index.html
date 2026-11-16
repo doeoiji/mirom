@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MiROM Hub – Xiaomi Official ROM Downloads</title>
+<meta name="description" content="Browse and download official Xiaomi, Redmi and POCO ROMs (HyperOS & MIUI) from official mirrors, sorted by speed.">
+<meta name="theme-color" content="#ff6900">
+<meta property="og:type" content="website">
+<meta property="og:title" content="MiROM Hub – Official Xiaomi ROM Downloads">
+<meta property="og:description" content="Latest and older HyperOS & MIUI ROMs for Xiaomi, Redmi and POCO. Search by codename, filter, and pick the fastest official mirror.">
+<meta name="twitter:card" content="summary">
+<meta name="mirom-api" content="https://api-rom.bitdev.fun">
+<link rel="dns-prefetch" href="https://bigota.d.miui.com">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='24' fill='%23ff6900'/%3E%3Ctext x='50' y='68' font-size='56' font-family='Arial' font-weight='bold' text-anchor='middle' fill='white'%3Emi%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="styles.css?v=7">
+</head>
+<body>
+<header class="topbar">
+  <div class="wrap bar">
+    <a class="brand" href="#" id="brand">
+      <span class="logo">mi</span>
+      <span class="brand-text"><b>MiROM Hub</b><small>Official Xiaomi ROMs</small></span>
+    </a>
+    <div class="bar-right">
+      <span class="live" id="live" title="Live feed status"><i class="dot"></i><span id="liveText">Connecting…</span></span>
+      <button class="icon-btn" id="refreshBtn" title="Check for new ROMs now" aria-label="Refresh">⟳</button>
+      <button class="icon-btn" id="themeBtn" title="Toggle theme" aria-label="Toggle theme">◐</button>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+  <section class="hero">
+    <h1>Find any official Xiaomi ROM</h1>
+    <p>HyperOS &amp; MIUI recovery and fastboot ROMs for Xiaomi, Redmi and POCO — new releases appear automatically.</p>
+    <div class="searchbox">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M15.5 14h-.8l-.3-.3A6.5 6.5 0 1 0 14 15.5l.3.3v.8l5 5 1.5-1.5-5-5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/></svg>
+      <input id="q" type="search" autocomplete="off" spellcheck="false" placeholder="Search by codename or model — e.g. alioth, POCO F3, Redmi Note 12, 2201116SG" autofocus>
+      <button id="clearQ" class="clear" hidden aria-label="Clear">✕</button>
+    </div>
+    <div id="suggest" class="suggest" hidden></div>
+  </section>
+
+  <section class="filters" id="filters">
+    <label>OS<select id="fOs"><option value="">All</option></select></label>
+    <label>Android<select id="fAv"><option value="">All</option></select></label>
+    <label>Channel<select id="fBranch"><option value="">All</option></select></label>
+    <label>Type<select id="fMethod"><option value="">All</option><option>Recovery</option><option>Fastboot</option></select></label>
+    <label>Released from<input type="date" id="fFrom"></label>
+    <label>to<input type="date" id="fTo"></label>
+    <label>Sort<select id="fSort">
+      <option value="new">Newest first</option>
+      <option value="old">Oldest first</option>
+      <option value="rec">Recovery first</option>
+      <option value="fast">Fastboot first</option>
+      <option value="name">Device A–Z</option>
+    </select></label>
+    <button id="reset" class="ghost">Reset</button>
+  </section>
+
+  <div class="quick" id="quick">
+    <button data-quick="7">Last 7 days</button>
+    <button data-quick="30">Last 30 days</button>
+    <button data-quick="hyper">HyperOS only</button>
+    <button data-quick="stable">Stable only</button>
+  </div>
+
+  <section id="deviceHead" class="devhead" hidden></section>
+
+  <div class="resultbar"><span id="count">Loading ROM database…</span><span id="pingSummary" class="pingsum"></span></div>
+
+  <section id="list" class="list" aria-live="polite">
+    <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
+  </section>
+  <div class="more"><button id="more" class="primary" hidden>Show more</button></div>
+</main>
+
+<footer class="wrap foot">
+  <p>All files are served directly from Xiaomi's official servers (<code>bigota</code>, <code>hugeota</code>, <code>cdnorg</code> …). This site hosts no files and is not affiliated with Xiaomi.
+  ROM metadata and link verification are served live by your MiROM Hub server polling Xiaomi's official update servers.
+  Flashing may void warranty — always verify the MD5 and back up your data.</p>
+</footer>
+
+<div id="toasts" class="toasts"></div>
+
+<dialog id="modal">
+  <form method="dialog" class="modal-head"><h2 id="mTitle"></h2><button aria-label="Close">✕</button></form>
+  <div id="mBody"></div>
+</dialog>
+
+<script src="app.js?v=7"></script>
+</body>
+</html>

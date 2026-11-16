@@ -1,0 +1,8 @@
+{
+  "name": "mirom-hub",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Xiaomi official ROM tracker: server + website",
+  "scripts": { "start": "node server/server.js" },
+  "engines": { "node": ">=18" }
+}
