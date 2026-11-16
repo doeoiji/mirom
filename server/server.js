@@ -70,7 +70,9 @@ function upsert(e, src, links) {
 function announce(list, label) {
   if (!list.length) return;
   save(); log(`+${list.length} new ROM(s) via ${label}:`, list.slice(0, 4).map(r => `${r.codename} ${r.version}`).join(', '));
-  pending.push(...list.map(r => ({ name: r.name, codename: r.codename, version: r.version, method: r.method, branch: r.branch })));
+  const cutoff = new Date(Date.now() - 14 * 864e5).toISOString().slice(0, 10);
+  const fresh = list.filter(r => !r.date || r.date >= cutoff);
+  if (fresh.length) pending.push(...fresh.map(r => ({ name: r.name, codename: r.codename, version: r.version, method: r.method, branch: r.branch })));
 }
 
 /* ---------- pollers ---------- */
@@ -86,11 +88,19 @@ async function syncFeed() {
 }
 
 async function pollApi() {
-  const newest = {};
+  const newest = {}, links = linkSet();
   for (const r of Object.values(db.roms)) { const n = newest[r.codename]; if (!n || r.date > n.date || (r.date === n.date && r.method === 'Recovery')) newest[r.codename] = r; }
   const jobs = Object.values(newest).flatMap(r => ['F', 'X'].map(branch => ({ codename: r.codename, version: r.version, android: r.android, branch })));
   const added = []; let ok = 0;
-  await pool(jobs, 40, async j => { for (const e of await X.queryApi(j)) { const rec = upsert({ ...e, date: today() }, 'api'); if (rec) added.push(rec); } ok++; });
+  await pool(jobs, 40, async j => {
+    for (const e of await X.queryApi(j)) {
+      if (db.roms[key(e)] || links.has(e.link)) { upsert(e, 'api', links); continue; }
+      const lm = await realDate(e.link);
+      const rec = upsert({ ...e, date: lm || today() }, 'api', links);
+      if (rec) { if (lm) rec.lm = 1; added.push(rec); }
+    }
+    ok++;
+  });
   db.meta.lastApi = Date.now(); db.meta.apiOk = ok; db.meta.apiJobs = jobs.length;
   announce(added, 'Xiaomi API'); log(`Xiaomi API polled: ${ok}/${jobs.length} ok, ${added.length} new`);
 }
@@ -107,10 +117,34 @@ async function backfillHistory() {
   db.meta.lastHistory = Date.now(); save(); log(`history backfill: ${bases.length} devices, +${added} older ROMs`);
 }
 
-/* ---------- link checker ---------- */
+/* ---------- link checker & real release date ---------- */
 const hostPath = l => { try { return new URL(l).pathname; } catch { return ''; } };
-async function headOk(url) {
-  try { const r = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(15000), redirect: 'follow' }); return r.status === 200 || r.status === 206; } catch { return false; }
+const parseLm = h => { if (!h) return ''; const t = Date.parse(h); return isNaN(t) ? '' : new Date(t).toISOString().slice(0, 10); };
+async function headInfo(url) {
+  try {
+    const r = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(15000), redirect: 'follow' });
+    return { ok: r.status === 200 || r.status === 206, date: parseLm(r.headers.get('last-modified')) };
+  } catch { return { ok: false, date: '' }; }
+}
+async function realDate(link) {
+  const p = hostPath(link); if (!p) return '';
+  for (const h of [MIRRORS[0], MIRRORS[4], MIRRORS[1]]) {
+    const info = await headInfo(`https://${h}${p}`);
+    if (info.ok && info.date) return info.date;
+  }
+  return '';
+}
+async function fixApiDates() {
+  const todo = Object.values(db.roms).filter(r => (r.src === 'api' || r.src === 'manual') && !r.lm);
+  if (!todo.length) return;
+  let fixed = 0;
+  await pool(todo, 12, async r => {
+    const d = await realDate(r.link);
+    r.lm = 1;
+    if (d && d !== r.date) { r.date = d; fixed++; }
+  });
+  save();
+  log(`verified release dates for ${todo.length} API ROMs (${fixed} updated)`);
 }
 let checking = false, queueLen = 0;
 async function checkTick() {
@@ -123,7 +157,9 @@ async function checkTick() {
     const batch = due.slice(0, 120);
     await pool(batch, 12, async r => {
       const p = hostPath(r.link); if (!p) return;
-      r.m = (await Promise.all(MIRRORS.map(async h => (await headOk(`https://${h}${p}`)) ? '1' : '0'))).join(''); r.mt = Date.now();
+      const res = await Promise.all(MIRRORS.map(h => headInfo(`https://${h}${p}`)));
+      r.m = res.map(x => x.ok ? '1' : '0').join(''); r.mt = Date.now();
+      if ((r.src === 'api' || !r.date) && !r.lm) { const d = res.find(x => x.ok && x.date)?.date; if (d) { r.date = d; r.lm = 1; } }
     });
     save(); log(`checked ${batch.length} ROMs, ${due.length - batch.length} still queued`);
   } finally { checking = false; }
@@ -180,6 +216,7 @@ load();
 dedupeDb();
 (async () => {
   log(`loaded ${Object.keys(db.roms).length} ROMs from disk`);
+  await fixApiDates();
   await syncFeed();
   pollApi().catch(e => log('api error', e.message));
   if (Date.now() - db.meta.lastHistory > HISTORY_MS) backfillHistory().catch(e => log('history error', e.message));
