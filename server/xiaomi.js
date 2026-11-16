@@ -87,4 +87,82 @@ async function queryApi({ codename, version, android, branch = 'F' }) {
   return out;
 }
 
-module.exports = { fetchFeed, fetchRss, queryApi, parseLatest };
+/* ---- Full per-device archive (xmfirmwareupdater.github.io) ---- */
+const ARCHIVE = 'https://raw.githubusercontent.com/XiaomiFirmwareUpdater/xmfirmwareupdater.github.io/master/pages/';
+const norm = s => unesc(s.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim());
+
+function inferCodename(base, name, file, nameMap) {
+  const byName = nameMap.get(name.toLowerCase());
+  if (byName) return byName;
+  const f = (file || '').toLowerCase();
+  for (const reg of ['eea_global', 'in_global', 'id_global', 'ru_global', 'tr_global', 'tw_global', 'jp_global', 'kr_global', 'global']) {
+    if (f.includes(`_${reg}_`) || f.includes(`-${reg}-`) || f.includes(`_${reg}-`)) return `${base}_${reg}`;
+  }
+  return base;
+}
+
+function parseArchiveTable(html, osType) {
+  const rows = [];
+  for (const m of html.matchAll(/<tr>([\s\S]*?)<\/tr>/g)) {
+    const tds = [...m[1].matchAll(/<td[^>]*>([\s\S]*?)<\/td>/g)].map(x => norm(x[1]));
+    if (tds.length < 7) continue;
+    const ver = tds[3];
+    if (ver) rows.push({ name: tds[0], branch: tds[1], method: tds[2], version: ver, android: tds[4], size: tds[5], date: tds[6], osType });
+  }
+  return rows;
+}
+
+function parseUpdateMd(md, base, nameMap, androidHints) {
+  const out = [];
+  for (const block of md.split('<div class="card card-body">').slice(1)) {
+    const field = label => {
+      const m = new RegExp(`<b>${label}:\\s*<\\/b>([\\s\\S]*?)<\\/li>`, 'i').exec(block);
+      return m ? norm(m[1]) : '';
+    };
+    const name = field('Device'), version = field('Version'), branch = field('Branch') || 'Stable', method = field('Type') || 'Recovery';
+    const size = field('Size'), date = field('Release Date'), file = (/id="filename"[^>]*>([^<]+)</.exec(block) || [])[1]?.trim() || '';
+    const md5 = clean((/id="md5"[^>]*>([^<]+)</.exec(block) || [])[1] || '');
+    const dlMatches = [...block.matchAll(/id="download"[^>]*onclick="window\.open\('([^']+)'/g)].map(x => x[1]);
+    const link = dlMatches.find(u => u.includes('bigota.d.miui.com')) || dlMatches[0] || '';
+    if (!version || !link) continue;
+    const cl = ((/id="changelog_text"[^>]*>([\s\S]*?)<\/p>/.exec(block) || [])[1] || '').replace(/<br\s*\/?>/gi, '\n').replace(/<[^>]+>/g, '').trim();
+    const avMatch = /(?:-user-|_)(\d+\.\d+)(?:-|_|(?:\.(?:zip|tgz)))/.exec(file);
+    const android = androidHints.get(`${version}|${method}`) || (avMatch ? avMatch[1] : '');
+    const codename = inferCodename(base, name, file, nameMap);
+    out.push({ codename, name, version, branch, method, size, date, md5, android, link, changelog: cl });
+  }
+  return out;
+}
+
+async function fetchDeviceArchive(base, nameMap, haveKeys) {
+  const sources = (await Promise.all(['hyperos', 'miui'].map(async osType => {
+    try { return parseArchiveTable(await getText(`${ARCHIVE}${osType}/full/${encodeURIComponent(base)}.md`, 20000), osType); }
+    catch { return []; }
+  }))).flat();
+  if (!sources.length) return [];
+
+  const androidHints = new Map();
+  const needed = new Map();
+  for (const r of sources) {
+    if (r.android) androidHints.set(`${r.version}|${r.method}`, r.android);
+    const c = inferCodename(base, r.name, '', nameMap);
+    if (!haveKeys.has(`${c}|${r.version}|${r.method}`)) needed.set(`${r.osType}|${r.version}`, r);
+  }
+  if (!needed.size) return [];
+
+  const results = [];
+  const items = [...needed.values()];
+  let idx = 0;
+  await Promise.all(Array.from({ length: Math.min(16, items.length) }, async () => {
+    while (idx < items.length) {
+      const it = items[idx++];
+      try {
+        const md = await getText(`${ARCHIVE}${it.osType}/updates/${encodeURIComponent(base)}/${encodeURIComponent(it.version)}.md`, 15000);
+        results.push(...parseUpdateMd(md, base, nameMap, androidHints));
+      } catch { }
+    }
+  }));
+  return results;
+}
+
+module.exports = { fetchFeed, fetchRss, queryApi, parseLatest, fetchDeviceArchive };

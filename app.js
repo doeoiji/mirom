@@ -41,6 +41,7 @@ const S = {
   devices: new Map(),     // codename -> {name, model}
   seen: new Set(),        // hashes seen in previous visits
   fresh: new Set(),       // ids new since last visit / detected live
+  arch: new Set(),        // base codenames whose full archive was requested
   device: null,           // selected codename
   shown: PAGE,
   ping: new Map(),        // host -> {ms|null, state}
@@ -134,6 +135,22 @@ async function loadAll(first) {
       $('#list').innerHTML = `<div class="empty">${hint} (${esc(e.message)}).<br>Make sure <code>node server/server.js</code> is running on your PC${location.hostname.endsWith('github.io') ? ' and pass your Cloudflare Tunnel URL via <code>?api=https://your-tunnel-url</code>' : ''}, then press ⟳.</div>`;
     }
   }
+}
+
+async function loadArchive(base) {
+  if (!base || S.arch.has(base)) return;
+  S.arch.add(base);
+  try {
+    const j = JSON.parse(await fetchText(API_BASE + '/api/archive?base=' + encodeURIComponent(base)));
+    if (!j || !Array.isArray(j.roms) || !j.roms.length) return;
+    if (S.status) {
+      for (const o of j.roms) if (o.m && o.link) { try { S.status.s[new URL(o.link).pathname.slice(1)] = o.m; } catch { } }
+    }
+    const prevFresh = new Set(S.fresh);
+    ingest(j.roms.map(makeRom).filter(Boolean), true);
+    S.fresh = prevFresh;
+    render();
+  } catch { }
 }
 
 async function checkSourceSync() {
@@ -248,12 +265,14 @@ function renderSuggest() {
   }
   out.sort((a, b) => (a[0].toLowerCase() === q ? -1 : 0) - (b[0].toLowerCase() === q ? -1 : 0) || a[1].name.length - b[1].name.length);
   el.hidden = !out.length;
+  const bases = [...new Set(out.map(([cn]) => cn.split('_')[0]))];
+  if (bases.length && bases.length <= 4) bases.forEach(loadArchive);
   el.innerHTML = out.slice(0, 8).map(([cn, d]) => `<button class="chip" data-dev="${esc(cn)}">${esc(d.name)}<code>${esc(cn)}</code></button>`).join('');
 }
 
 function selectDevice(cn) {
   S.device = cn || null; S.shown = PAGE;
-  if (cn) { $('#q').value = ''; $('#clearQ').hidden = true; }
+  if (cn) { $('#q').value = ''; $('#clearQ').hidden = true; loadArchive(cn.split('_')[0]); }
   render(); if (cn) scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -413,6 +432,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) { do
   readHash();
   measurePings();
   await loadAll(true);
+  if (S.device) loadArchive(S.device.split('_')[0]);
   applyPendingSel(); render();
   checkSourceSync();
   setInterval(() => { if (!document.hidden) loadAll(false); }, POLL_MS);

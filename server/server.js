@@ -105,6 +105,45 @@ async function pollApi() {
   announce(added, 'Xiaomi API'); log(`Xiaomi API polled: ${ok}/${jobs.length} ok, ${added.length} new`);
 }
 
+const archiveBusy = new Map();
+async function syncArchive(base) {
+  base = String(base || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  if (!base) return 0;
+  if (archiveBusy.has(base)) return archiveBusy.get(base);
+  const p = (async () => {
+    db.meta.archives ||= {};
+    const names = nameMap(), links = linkSet(), haveKeys = new Set(Object.keys(db.roms));
+    const items = await X.fetchDeviceArchive(base, names, haveKeys);
+    let added = 0;
+    for (const e of items) if (upsert(e, 'archive', links)) added++;
+    db.meta.archives[base] = Date.now();
+    if (added) { save(); log(`archive ${base}: +${added} historical ROMs`); checkTick().catch(() => { }); }
+    else save();
+    return added;
+  })().finally(() => archiveBusy.delete(base));
+  archiveBusy.set(base, p);
+  return p;
+}
+
+async function backfillAllArchives() {
+  db.meta.archives ||= {};
+  const latestByBase = new Map();
+  for (const r of Object.values(db.roms)) {
+    const b = r.codename.split('_')[0];
+    if (!latestByBase.has(b) || r.date > latestByBase.get(b)) latestByBase.set(b, r.date || '');
+  }
+  const bases = [...new Set(Object.keys(db.devices).map(c => c.split('_')[0]))]
+    .filter(b => !db.meta.archives[b])
+    .sort((a, b) => (latestByBase.get(b) || '').localeCompare(latestByBase.get(a) || ''));
+  if (!bases.length) return;
+  log(`background archive sync: ${bases.length} devices queued`);
+  for (const b of bases) {
+    try { await syncArchive(b); } catch { }
+    await new Promise(r => setTimeout(r, 800));
+  }
+  log('background archive sync complete');
+}
+
 async function backfillHistory() {
   const bases = [...new Set(Object.keys(db.devices).map(c => c.split('_')[0]))], names = nameMap(), links = linkSet(); let added = 0;
   await pool(bases, 8, async b => {
@@ -167,9 +206,10 @@ async function checkTick() {
 
 /* ---------- HTTP ---------- */
 let cache = { v: -1 };
+const formatRom = r => { const o = {}; for (const f of FIELDS) if (r[f]) o[f] = r[f]; if (r.m) o.m = r.m; if (r.src === 'api') o.live = 1; return o; };
 function payload() {
   if (cache.v !== version()) {
-    const roms = Object.values(db.roms).map(r => { const o = {}; for (const f of FIELDS) if (r[f]) o[f] = r[f]; if (r.m) o.m = r.m; if (r.src === 'api') o.live = 1; return o; });
+    const roms = Object.values(db.roms).map(formatRom);
     const json = Buffer.from(JSON.stringify({ hosts: MIRRORS, updated: Date.now(), count: roms.length, devices: Object.fromEntries(Object.entries(db.devices).map(([k, d]) => [k, d])), roms }));
     cache = { v: version(), json, gz: zlib.gzipSync(json, { level: 6 }), etag: `"${version()}-${roms.length}"` };
   }
@@ -178,7 +218,7 @@ function payload() {
 const TYPES = { '.html': 'text/html; charset=utf-8', '.css': 'text/css; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml' };
 const STATIC = new Set(['index.html', 'app.js', 'styles.css']);
 
-http.createServer((req, res) => {
+http.createServer(async (req, res) => {
   const u = new URL(req.url, 'http://x');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
@@ -189,6 +229,18 @@ http.createServer((req, res) => {
     if (req.headers['if-none-match'] === c.etag) { res.statusCode = 304; return res.end(); }
     if (/gzip/.test(req.headers['accept-encoding'] || '')) { res.setHeader('Content-Encoding', 'gzip'); return res.end(c.gz); }
     return res.end(c.json);
+  }
+  if (u.pathname === '/api/archive') {
+    const base = (u.searchParams.get('base') || '').split('_')[0].replace(/[^a-zA-Z0-9_-]/g, '');
+    if (!base) { res.statusCode = 400; return res.end('{"error":"missing base"}'); }
+    db.meta.archives ||= {};
+    let added = 0;
+    if (!db.meta.archives[base] || Date.now() - db.meta.archives[base] > 24 * 3600000) {
+      try { added = await syncArchive(base); } catch { }
+    }
+    const roms = Object.values(db.roms).filter(r => r.codename === base || r.codename.startsWith(base + '_')).map(formatRom);
+    res.setHeader('Content-Type', 'application/json'); res.setHeader('Cache-Control', 'no-cache');
+    return res.end(JSON.stringify({ base, added, hosts: MIRRORS, updated: Date.now(), roms }));
   }
   if (u.pathname === '/api/events') {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
@@ -225,5 +277,6 @@ dedupeDb();
   setInterval(() => backfillHistory().catch(() => { }), HISTORY_MS);
   setInterval(() => checkTick().catch(e => log('check error', e.message)), 15000);
   checkTick();
+  setTimeout(() => backfillAllArchives().catch(e => log('archive bg error', e.message)), 10000);
 })();
 process.on('SIGINT', () => { try { fs.writeFileSync(path.join(process.env.DATA_DIR || path.join(ROOT, 'data'), 'db.json'), JSON.stringify(db)); } catch { } process.exit(0); });
